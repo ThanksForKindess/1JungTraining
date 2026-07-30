@@ -852,80 +852,80 @@ try:
 # 향후 50년 인구 변화 애니메이션
 # ------------------------------------------------------------
 
-st.markdown(
-    """
-    <div style="
-        text-align:center;
-        margin-top:10px;
-        margin-bottom:10px;
-        font-size:18px;
-        font-weight:600;
-    ">
-        지금의 인구 변화가 계속된다면, 50년 뒤 우리 지역은 어떻게 변할까요?
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-if "show_population_animation" not in st.session_state:
-    st.session_state["show_population_animation"] = False
-
-button_left, button_center, button_right = st.columns(
-    [1, 2, 1]
-)
-
-with button_center:
-    if st.button(
-        "⚠ 향후 50년 인구 소멸 시뮬레이션 보기",
-        use_container_width=True,
-        type="primary",
-    ):
-        st.session_state["show_population_animation"] = True
-
-
-if st.session_state["show_population_animation"]:
-    st.warning(
-        "이 지도는 공식 장래인구추계가 아닙니다. "
-        "과거 인구 증감 추세가 앞으로도 계속된다고 가정한 "
-        "시각적 시뮬레이션입니다."
+    st.markdown(
+        """
+        <div style="
+            text-align:center;
+            margin-top:10px;
+            margin-bottom:10px;
+            font-size:18px;
+            font-weight:600;
+        ">
+            지금의 인구 변화가 계속된다면, 50년 뒤 우리 지역은 어떻게 변할까요?
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-
-    with st.spinner(
-        "향후 50년의 인구 변화 장면을 계산하고 있습니다."
-    ):
-        projection_df, projection_start_year, projection_end_year = (
-            prepare_population_projection(
-                population_df=population_df,
-                geojson=geojson,
-                years_ahead=50,
-            )
+    
+    if "show_population_animation" not in st.session_state:
+        st.session_state["show_population_animation"] = False
+    
+    button_left, button_center, button_right = st.columns(
+        [1, 2, 1]
+    )
+    
+    with button_center:
+        if st.button(
+            "⚠ 향후 50년 인구 소멸 시뮬레이션 보기",
+            use_container_width=True,
+            type="primary",
+        ):
+            st.session_state["show_population_animation"] = True
+    
+    
+    if st.session_state["show_population_animation"]:
+        st.warning(
+            "이 지도는 공식 장래인구추계가 아닙니다. "
+            "과거 인구 증감 추세가 앞으로도 계속된다고 가정한 "
+            "시각적 시뮬레이션입니다."
         )
-
-        population_animation = (
-            create_population_extinction_animation(
-                projection_df=projection_df,
-                geojson=geojson,
+    
+        with st.spinner(
+            "향후 50년의 인구 변화 장면을 계산하고 있습니다."
+        ):
+            projection_df, projection_start_year, projection_end_year = (
+                prepare_population_projection(
+                    population_df=population_df,
+                    geojson=geojson,
+                    years_ahead=50,
+                )
             )
+    
+            population_animation = (
+                create_population_extinction_animation(
+                    projection_df=projection_df,
+                    geojson=geojson,
+                )
+            )
+    
+        st.subheader(
+            f"{projection_start_year}년부터 "
+            f"{projection_end_year}년까지의 인구 변화"
         )
-
-    st.subheader(
-        f"{projection_start_year}년부터 "
-        f"{projection_end_year}년까지의 인구 변화"
-    )
-
-    st.plotly_chart(
-        population_animation,
-        use_container_width=True,
-        config={
-            "displaylogo": False,
-            "scrollZoom": False,
-        },
-    )
-
-    st.caption(
-        "색이 진한 붉은색으로 변할수록 현재보다 "
-        "인구가 크게 감소한 지역입니다."
-    )
+    
+        st.plotly_chart(
+            population_animation,
+            use_container_width=True,
+            config={
+                "displaylogo": False,
+                "scrollZoom": False,
+            },
+        )
+    
+        st.caption(
+            "색이 진한 붉은색으로 변할수록 현재보다 "
+            "인구가 크게 감소한 지역입니다."
+        )
 
     st.divider()
 
