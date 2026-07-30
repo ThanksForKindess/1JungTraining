@@ -341,6 +341,7 @@ def create_choropleth(map_df: pd.DataFrame, geojson: dict):
         margin=dict(l=0, r=0, t=10, b=0),
         paper_bgcolor="white",
         plot_bgcolor="white",
+    
         legend=dict(
             title="65세 이상 인구 비율",
             orientation="v",
@@ -348,10 +349,20 @@ def create_choropleth(map_df: pd.DataFrame, geojson: dict):
             y=0.98,
             xanchor="left",
             x=0.01,
-            bgcolor="rgba(255,255,255,0.9)",
+            bgcolor="rgba(255,255,255,0.95)",
             bordercolor="#cccccc",
             borderwidth=1,
             traceorder="normal",
+    
+            font=dict(
+                color="#000000",
+                size=13,
+            ),
+    
+            title_font=dict(
+                color="#000000",
+                size=14,
+            ),
         ),
     )
 
