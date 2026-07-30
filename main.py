@@ -368,6 +368,367 @@ def create_choropleth(map_df: pd.DataFrame, geojson: dict):
 
     return fig
 
+# ------------------------------------------------------------
+# 향후 50년 인구 변화 시뮬레이션
+# ------------------------------------------------------------
+
+def prepare_population_projection(
+    population_df: pd.DataFrame,
+    geojson: dict,
+    years_ahead: int = 50,
+) -> tuple[pd.DataFrame, int, int]:
+    """
+    과거 인구 증감 추세를 이용해 향후 인구를 단순 계산합니다.
+
+    주의:
+    국가기관의 공식 장래인구추계가 아니라
+    과거 변화율이 계속 이어진다고 가정한 시뮬레이션입니다.
+    """
+    df = population_df.copy()
+
+    # 연도와 행정동 코드를 정리합니다.
+    df["연도"] = pd.to_numeric(df["연도"], errors="coerce")
+
+    df["코드"] = (
+        df["코드"]
+        .astype("string")
+        .str.strip()
+        .str.replace(r"\.0$", "", regex=True)
+        .str.zfill(10)
+    )
+
+    df = df.dropna(subset=["연도", "코드"])
+    df["연도"] = df["연도"].astype(int)
+
+    # 행정동 코드 앞 5자리가 시군구 코드입니다.
+    df["시군구코드"] = df["코드"].str[:5]
+
+    # 전체 인구 계산에 필요한 '계_나이' 열을 찾습니다.
+    total_columns, _ = find_population_columns(df)
+
+    # 인구 열을 숫자로 변환합니다.
+    for column in total_columns:
+        df[column] = pd.to_numeric(
+            df[column]
+            .astype("string")
+            .str.replace(",", "", regex=False)
+            .str.strip(),
+            errors="coerce",
+        ).fillna(0)
+
+    # 읍·면·동별 전체 인구를 계산합니다.
+    df["전체인구"] = df[total_columns].sum(axis=1)
+
+    # 연도·시군구별로 인구를 합칩니다.
+    yearly_population = (
+        df.groupby(
+            ["연도", "시군구코드"],
+            as_index=False,
+        )["전체인구"]
+        .sum()
+    )
+
+    first_year = int(yearly_population["연도"].min())
+    latest_year = int(yearly_population["연도"].max())
+    year_count = max(latest_year - first_year, 1)
+
+    # 최초 연도와 최신 연도 인구를 각각 가져옵니다.
+    first_population = (
+        yearly_population[
+            yearly_population["연도"] == first_year
+        ][["시군구코드", "전체인구"]]
+        .rename(columns={"전체인구": "최초인구"})
+    )
+
+    latest_population = (
+        yearly_population[
+            yearly_population["연도"] == latest_year
+        ][["시군구코드", "전체인구"]]
+        .rename(columns={"전체인구": "현재인구"})
+    )
+
+    trend_df = latest_population.merge(
+        first_population,
+        on="시군구코드",
+        how="left",
+    )
+
+    # 연평균 인구 변화율을 계산합니다.
+    # 최초 인구가 없거나 0인 경우 변화율을 0으로 처리합니다.
+    valid_mask = (
+        trend_df["최초인구"].notna()
+        & (trend_df["최초인구"] > 0)
+        & (trend_df["현재인구"] > 0)
+    )
+
+    trend_df["연평균변화율"] = 0.0
+
+    trend_df.loc[valid_mask, "연평균변화율"] = (
+        (
+            trend_df.loc[valid_mask, "현재인구"]
+            / trend_df.loc[valid_mask, "최초인구"]
+        )
+        ** (1 / year_count)
+        - 1
+    )
+
+    # 극단적인 값 때문에 지도가 망가지지 않도록 제한합니다.
+    # 연간 최대 감소율 -8%, 최대 증가율 2%로 제한합니다.
+    trend_df["연평균변화율"] = trend_df[
+        "연평균변화율"
+    ].clip(lower=-0.08, upper=0.02)
+
+    # GeoJSON의 지역 이름을 표로 만듭니다.
+    region_rows = []
+
+    for feature in geojson.get("features", []):
+        properties = feature.get("properties", {})
+
+        code = str(properties.get("코드", "")).strip().zfill(5)
+        feature["properties"]["코드"] = code
+
+        region_rows.append(
+            {
+                "시군구코드": code,
+                "시도": properties.get("시도", ""),
+                "시군구": properties.get("시군구", ""),
+            }
+        )
+
+    region_df = pd.DataFrame(region_rows)
+
+    trend_df = region_df.merge(
+        trend_df,
+        on="시군구코드",
+        how="left",
+    )
+
+    trend_df["연평균변화율"] = trend_df[
+        "연평균변화율"
+    ].fillna(0)
+
+    frames = []
+
+    # 최신 연도부터 50년 뒤까지 매년 계산합니다.
+    for elapsed_year in range(years_ahead + 1):
+        year = latest_year + elapsed_year
+
+        frame = trend_df.copy()
+        frame["연도"] = year
+
+        frame["예상인구"] = (
+            frame["현재인구"]
+            * (1 + frame["연평균변화율"]) ** elapsed_year
+        )
+
+        # 현재 인구 대비 몇 퍼센트가 남았는지 계산합니다.
+        frame["현재대비인구"] = np.where(
+            frame["현재인구"] > 0,
+            frame["예상인구"] / frame["현재인구"] * 100,
+            np.nan,
+        )
+
+        frames.append(frame)
+
+    projection_df = pd.concat(
+        frames,
+        ignore_index=True,
+    )
+
+    # 인구 잔존 비율을 5개 단계로 나눕니다.
+    projection_order = [
+        "현재의 90% 이상",
+        "현재의 75~90%",
+        "현재의 50~75%",
+        "현재의 25~50%",
+        "현재의 25% 미만",
+    ]
+
+    projection_df["인구 변화 단계"] = pd.cut(
+        projection_df["현재대비인구"],
+        bins=[-np.inf, 25, 50, 75, 90, np.inf],
+        labels=[
+            "현재의 25% 미만",
+            "현재의 25~50%",
+            "현재의 50~75%",
+            "현재의 75~90%",
+            "현재의 90% 이상",
+        ],
+        right=False,
+    )
+
+    projection_df["인구 변화 단계"] = pd.Categorical(
+        projection_df["인구 변화 단계"],
+        categories=projection_order,
+        ordered=True,
+    )
+
+    projection_df["현재인구 표시"] = (
+        projection_df["현재인구"]
+        .round()
+        .astype("Int64")
+    )
+
+    projection_df["예상인구 표시"] = (
+        projection_df["예상인구"]
+        .round()
+        .astype("Int64")
+    )
+
+    projection_df["현재대비인구 표시"] = (
+        projection_df["현재대비인구"].round(1)
+    )
+
+    projection_df["연평균변화율 표시"] = (
+        projection_df["연평균변화율"] * 100
+    ).round(2)
+
+    return projection_df, latest_year, latest_year + years_ahead
+
+
+def create_population_extinction_animation(
+    projection_df: pd.DataFrame,
+    geojson: dict,
+):
+    """
+    향후 50년간 인구 변화 과정을 애니메이션 지도로 만듭니다.
+    """
+    projection_order = [
+        "현재의 90% 이상",
+        "현재의 75~90%",
+        "현재의 50~75%",
+        "현재의 25~50%",
+        "현재의 25% 미만",
+    ]
+
+    # 인구가 크게 줄어들수록 어둡고 강한 붉은색이 됩니다.
+    projection_colors = {
+        "현재의 90% 이상": "#f2f2f2",
+        "현재의 75~90%": "#fdd49e",
+        "현재의 50~75%": "#fc8d59",
+        "현재의 25~50%": "#d7301f",
+        "현재의 25% 미만": "#67000d",
+    }
+
+    drawable_df = projection_df.dropna(
+        subset=[
+            "현재대비인구",
+            "인구 변화 단계",
+        ]
+    ).copy()
+
+    fig = px.choropleth(
+        drawable_df,
+        geojson=geojson,
+        locations="시군구코드",
+        featureidkey="properties.코드",
+        color="인구 변화 단계",
+        animation_frame="연도",
+        category_orders={
+            "인구 변화 단계": projection_order,
+        },
+        color_discrete_map=projection_colors,
+        custom_data=[
+            "시군구",
+            "시도",
+            "현재인구 표시",
+            "예상인구 표시",
+            "현재대비인구 표시",
+            "연평균변화율 표시",
+        ],
+    )
+
+    fig.update_traces(
+        marker_line_color="#555555",
+        marker_line_width=0.45,
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "시도: %{customdata[1]}<br>"
+            "현재 인구: %{customdata[2]:,}명<br>"
+            "시뮬레이션 인구: %{customdata[3]:,}명<br>"
+            "현재 대비: %{customdata[4]:.1f}%<br>"
+            "과거 연평균 변화율: %{customdata[5]:.2f}%"
+            "<extra></extra>"
+        ),
+    )
+
+    fig.update_geos(
+        fitbounds="locations",
+        visible=False,
+        showcoastlines=False,
+        showcountries=False,
+        showland=False,
+        showlakes=False,
+        showocean=False,
+        bgcolor="rgba(0,0,0,0)",
+    )
+
+    fig.update_layout(
+        height=780,
+        margin=dict(
+            l=0,
+            r=0,
+            t=20,
+            b=90,
+        ),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        legend=dict(
+            title="현재 인구 대비 잔존 비율",
+            orientation="v",
+            yanchor="top",
+            y=0.98,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="#999999",
+            borderwidth=1,
+            font=dict(
+                color="#111111",
+                size=13,
+            ),
+            title_font=dict(
+                color="#111111",
+                size=14,
+            ),
+        ),
+    )
+
+    # 애니메이션 아래의 연도 표시를 크게 만듭니다.
+    if fig.layout.sliders:
+        fig.layout.sliders[0].currentvalue = {
+            "prefix": "현재 연도: ",
+            "font": {
+                "size": 28,
+                "color": "#67000d",
+            },
+            "visible": True,
+            "xanchor": "center",
+        }
+
+        fig.layout.sliders[0].x = 0.12
+        fig.layout.sliders[0].len = 0.76
+        fig.layout.sliders[0].pad = {
+            "t": 45,
+            "b": 10,
+        }
+
+    # 재생 속도를 조절합니다.
+    if fig.layout.updatemenus:
+        fig.layout.updatemenus[0].buttons[0].args[1][
+            "frame"
+        ]["duration"] = 260
+
+        fig.layout.updatemenus[0].buttons[0].args[1][
+            "transition"
+        ]["duration"] = 120
+
+        fig.layout.updatemenus[0].buttons[0].label = (
+            "▶ 50년 재생"
+        )
+
+    return fig
+
 
 # ------------------------------------------------------------
 # 7. 순위 표 만들기
@@ -485,6 +846,85 @@ try:
             "displaylogo": False,
             "scrollZoom": False,
         },
+    )
+
+    # ------------------------------------------------------------
+# 향후 50년 인구 변화 애니메이션
+# ------------------------------------------------------------
+
+st.markdown(
+    """
+    <div style="
+        text-align:center;
+        margin-top:10px;
+        margin-bottom:10px;
+        font-size:18px;
+        font-weight:600;
+    ">
+        지금의 인구 변화가 계속된다면, 50년 뒤 우리 지역은 어떻게 변할까요?
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+if "show_population_animation" not in st.session_state:
+    st.session_state["show_population_animation"] = False
+
+button_left, button_center, button_right = st.columns(
+    [1, 2, 1]
+)
+
+with button_center:
+    if st.button(
+        "⚠ 향후 50년 인구 소멸 시뮬레이션 보기",
+        use_container_width=True,
+        type="primary",
+    ):
+        st.session_state["show_population_animation"] = True
+
+
+if st.session_state["show_population_animation"]:
+    st.warning(
+        "이 지도는 공식 장래인구추계가 아닙니다. "
+        "과거 인구 증감 추세가 앞으로도 계속된다고 가정한 "
+        "시각적 시뮬레이션입니다."
+    )
+
+    with st.spinner(
+        "향후 50년의 인구 변화 장면을 계산하고 있습니다."
+    ):
+        projection_df, projection_start_year, projection_end_year = (
+            prepare_population_projection(
+                population_df=population_df,
+                geojson=geojson,
+                years_ahead=50,
+            )
+        )
+
+        population_animation = (
+            create_population_extinction_animation(
+                projection_df=projection_df,
+                geojson=geojson,
+            )
+        )
+
+    st.subheader(
+        f"{projection_start_year}년부터 "
+        f"{projection_end_year}년까지의 인구 변화"
+    )
+
+    st.plotly_chart(
+        population_animation,
+        use_container_width=True,
+        config={
+            "displaylogo": False,
+            "scrollZoom": False,
+        },
+    )
+
+    st.caption(
+        "색이 진한 붉은색으로 변할수록 현재보다 "
+        "인구가 크게 감소한 지역입니다."
     )
 
     st.divider()
