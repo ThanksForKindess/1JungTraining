@@ -207,8 +207,8 @@ def prepare_aging_data(population_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     sigungu_df = (
         df.groupby("시군구코드", as_index=False)
         .agg(
-            전체인구=("전체인구", "sum"),
-            65세이상인구=("65세이상인구", "sum"),
+            "전체인구": ("전체인구", "sum"),
+            "65세이상인구": ("65세이상인구", "sum"),
         )
     )
 
