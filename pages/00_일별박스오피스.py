@@ -267,29 +267,22 @@ def get_movie_title_font_size(movie_title: str) -> int:
 
 def render_top_movie_card(movie_title: str) -> None:
     """
-    st.metric 대신 직접 만든 HTML 카드를 표시합니다.
-
-    st.metric은 긴 문자열이 생략될 수 있으므로
-    줄바꿈과 글자 크기 조절이 가능한 카드를 사용합니다.
+    긴 영화 제목도 잘리지 않도록 직접 만든 카드를 표시합니다.
     """
     safe_title = html.escape(str(movie_title))
     font_size = get_movie_title_font_size(movie_title)
 
-    st.markdown(
-        f"""
-        <div class="top-movie-card">
-            <div class="top-movie-label">
-                어제 1위
-            </div>
+    card_html = f"""
+<div class="top-movie-card">
+    <div class="top-movie-label">어제 1위</div>
+    <div class="top-movie-title" style="font-size:{font_size}px;">
+        {safe_title}
+    </div>
+</div>
+"""
 
-            <div
-                class="top-movie-title"
-                style="font-size:{font_size}px;"
-            >
-                {safe_title}
-            </div>
-        </div>
-        """,
+    st.markdown(
+        card_html,
         unsafe_allow_html=True,
     )
 
